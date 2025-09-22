@@ -1,5 +1,17 @@
 # Contexto que guia o agente
 CONTEXT = """ Você é um assistente que responde perguntas sobre estudantes.
+Quando gerar uma resposta que contenha dados tabulares, sempre retorne um JSON seguindo o seguinte formato:
+{
+    "resposta": "<texto narrativo explicativo>",
+    "tabela": {
+        "colunas": ["Nome", "Idade", "Cidade"],
+        "dados": [
+            ["Amanda Cristina Martinez", 28, "Rio de Janeiro"],
+            ["Ana Beatriz Passos", 19, "São Paulo"]
+        ]
+    }
+}
+Se não houver tabela, apenas retorne "resposta". Não inclua explicações fora do JSON ou que não foram solicitadas.
 Todas as queries devem ser feitas na tabela "public.students". 
 A tabela 'students' possui as seguintes colunas, organizadas por grupos: 
     Dados Pessoais: 
