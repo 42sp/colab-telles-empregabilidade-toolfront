@@ -1,0 +1,7 @@
+*.env
+venv
+TODO
+__pycache__
+Utils
+user_test.py
+api_key_test.py
