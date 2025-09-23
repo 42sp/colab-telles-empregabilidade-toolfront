@@ -10,9 +10,9 @@ from dotenv import load_dotenv
 from toolfront import Database
 from pydantic_ai.exceptions import ModelRetry
 import tiktoken
-import psycopg2
-from psycopg2 import pool
+import psycopg
 from urllib.parse import urlparse, parse_qs
+from psycopg_pool import ConnectionPool
 
 # -------------------------
 # Configurações externas
@@ -33,11 +33,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("toolfront_api")
 
 # -------------------------
-# Pool de conexões
+# Pool de conexões com psycopg3
 # -------------------------
 DB_POOL_MIN = 1
 DB_POOL_MAX = 5
-db_pool: psycopg2.pool.ThreadedConnectionPool | None = None
+DB_POOL_MAX_LIFETIME = 900  # 15 minutos
+db_pool: ConnectionPool | None = None
 db: Database | None = None
 
 def parse_database_url(url: str):
@@ -48,7 +49,7 @@ def parse_database_url(url: str):
         "password": parsed.password,
         "host": parsed.hostname,
         "port": parsed.port or 5432,
-        "database": parsed.path.lstrip("/"),
+        "dbname": parsed.path.lstrip("/"),
         "sslmode": qs.get("sslmode", ["disable"])[0]
     }
 
@@ -56,61 +57,43 @@ def init_db_pool():
     """Inicializa pool e objeto Database"""
     global db_pool, db
     if db_pool:
-        try:
-            db_pool.closeall()
-        except Exception:
-            pass
-
-    kwargs = parse_database_url(DATABASE_URL)
-    db_pool = psycopg2.pool.ThreadedConnectionPool(
-        minconn=DB_POOL_MIN,
-        maxconn=DB_POOL_MAX,
-        **kwargs
+        db_pool.close()
+    
+    db_pool = ConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=DB_POOL_MIN,
+        max_size=DB_POOL_MAX
     )
 
     # Configura search_path nas conexões iniciais
-    for _ in range(DB_POOL_MIN):
-        conn = db_pool.getconn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SET search_path TO public;")
-            conn.commit()
-        finally:
-            db_pool.putconn(conn)
+    with db_pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET search_path TO public;")
 
     db = Database(DATABASE_URL)
     logger.info("Pool de conexões e Database inicializados.")
 
 def get_conn_from_pool():
-    """Obtém conexão válida do pool, recriando se necessário"""
+    """Retorna um context manager de conexão válida do pool"""
     global db_pool
     if not db_pool:
         init_db_pool()
-    try:
-        conn = db_pool.getconn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1;")
-        return conn
-    except Exception as e:
-        logger.warning(f"Conexão inválida detectada no pool: {e}. Reinicializando pool.")
-        conn = db_pool.getconn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1;")
-        return conn
-
-def release_conn_to_pool(conn):
-    if db_pool and conn:
-        db_pool.putconn(conn)
+    
+    for _ in range(3):
+        try:
+            return db_pool.connection()  # <-- retorna o context manager corretamente
+        except Exception as e:
+            logger.warning(f"Conexão inválida: {e}. Reinicializando pool...")
+            init_db_pool()
+    raise Exception("Não foi possível obter conexão válida")
 
 async def keep_alive():
     """Executa SELECT 1 periodicamente para evitar timeout"""
     while True:
         try:
-            conn = get_conn_from_pool()
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1;")
-            conn.commit()
-            release_conn_to_pool(conn)
+            with get_conn_from_pool() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1;")
         except Exception as e:
             logger.warning(f"Keep-alive falhou, reiniciando pool: {e}")
             init_db_pool()
@@ -179,7 +162,7 @@ async def startup_event():
 # -------------------------
 # CORS
 # -------------------------
-origins = ["http://localhost:5173"] if ENV == "development" else ["https://meu-frontend.com"]
+origins = ["http://localhost:5173"] if ENV == "development" else ["https://colab-telles-empregabilidade-toolfront.onrender.com"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -223,7 +206,7 @@ async def ask_question(request: AskRequest):
             for attempt in range(3):
                 try:
                     return db.ask(request.pergunta, model="gpt-4o-mini", context=context_truncado)
-                except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                except (psycopg.OperationalError, psycopg.InterfaceError) as e:
                     logger.warning(f"Conexão perdida (tentativa {attempt+1}): {e}. Reinicializando db...")
                     init_db_pool()
                     time.sleep(1)
@@ -252,12 +235,11 @@ async def ask_question(request: AskRequest):
 
 @app.post("/reconnect-db")
 async def reconnect_db():
-    """
-    Força reinicialização do pool de conexões e do objeto Database
-    """
+    """Força reinicialização do pool de conexões e do objeto Database"""
     try:
-        conn = get_conn_from_pool()
-        release_conn_to_pool(conn)
+        with get_conn_from_pool() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
         return {"success": True, "db_connected": True}
     except Exception as e:
         logger.exception("Falha ao reconectar ao DB")
@@ -267,10 +249,9 @@ async def reconnect_db():
 @app.get("/health")
 async def health_check():
     try:
-        conn = get_conn_from_pool()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1;")
-        release_conn_to_pool(conn)
+        with get_conn_from_pool() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
         return {"status": "connected"}
     except Exception:
         return {"status": "disconnected"}
