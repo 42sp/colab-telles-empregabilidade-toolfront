@@ -2,10 +2,11 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY requirements.txt main.py ./
+COPY . .
 
 RUN pip install --upgrade pip
-RUN pip install uvicorn fastapi git+https://github.com/kruskal-labs/toolfront.git -r requirements.txt
+RUN pip install -r requirements.txt
+RUN pip install git+https://github.com/kruskal-labs/toolfront.git
 
 EXPOSE 3000
 
