@@ -162,7 +162,12 @@ async def startup_event():
 # -------------------------
 # CORS
 # -------------------------
-origins = ["http://localhost:5173"] if ENV == "development" else ["https://colab-telles-empregabilidade-toolfront.onrender.com"]
+origins = (
+    ["http://localhost:5173"]
+    if ENV == "development"
+    else ["https://colab-telles-empregabilidade-frontend.onrender.com"]
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
