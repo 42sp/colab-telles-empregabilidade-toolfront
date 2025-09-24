@@ -165,7 +165,10 @@ async def startup_event():
 origins = (
     ["http://localhost:5173"]
     if ENV == "development"
-    else ["https://colab-telles-empregabilidade-frontend.onrender.com"]
+    else [
+        "https://colab-telles-empregabilidade-frontend.onrender.com",
+        "https://temp-empregabilidade-toolfront.eorpdr.easypanel.host"
+    ]
 )
 
 app.add_middleware(
